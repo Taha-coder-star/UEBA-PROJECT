@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Data (CRUCIAL)
+archive/
+cleaned/
+*.csv
+
+# Models
+models/
+*.pkl
+
+# Misc
+.DS_Store
