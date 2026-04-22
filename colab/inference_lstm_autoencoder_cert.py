@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import pickle
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # for train_lstm_autoencoder_cert
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # for config
+from config import MODELS_DIR  # noqa: E402
 from train_lstm_autoencoder_cert import (
     BEHAVIORAL_FEATURES,
     WINDOW_SIZE,
@@ -21,8 +25,7 @@ from train_lstm_autoencoder_cert import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[1]
-MODEL_PATH = ROOT / "models" / "lstm_autoencoder_cert.pkl"
+MODEL_PATH = MODELS_DIR / "lstm_autoencoder_cert.pkl"
 
 
 def load_artifacts(model_path: str | Path = MODEL_PATH) -> dict:

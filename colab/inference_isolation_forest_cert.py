@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 import pickle
 
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from config import MODELS_DIR  # noqa: E402
 
-ROOT = Path(__file__).resolve().parents[1]
-MODEL_PATH = ROOT / "models" / "isolation_forest_cert.pkl"
+MODEL_PATH = MODELS_DIR / "isolation_forest_cert.pkl"
 
 
 def load_artifacts(model_path: str | Path = MODEL_PATH) -> dict:

@@ -9,16 +9,18 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT / "colab") not in sys.path:
-    sys.path.insert(0, str(ROOT / "colab"))
+_CODE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_CODE_ROOT))
+if str(_CODE_ROOT / "colab") not in sys.path:
+    sys.path.insert(0, str(_CODE_ROOT / "colab"))
 
-from inference_isolation_forest_cert import load_artifacts as load_iforest_artifacts, score_single_row
+from config import CLEANED_DIR, MODELS_DIR  # noqa: E402
+from inference_isolation_forest_cert import load_artifacts as load_iforest_artifacts, score_single_row  # noqa: E402
 
-IFOREST_SCORED_PATH = ROOT / "cleaned" / "email_user_daily_scored.csv"
-IFOREST_SUMMARY_PATH = ROOT / "models" / "isolation_forest_summary.json"
-LSTM_SCORED_PATH = ROOT / "cleaned" / "email_user_daily_lstm_scored.csv"
-LSTM_SUMMARY_PATH = ROOT / "models" / "lstm_autoencoder_summary.json"
+IFOREST_SCORED_PATH  = CLEANED_DIR / "email_user_daily_scored.csv"
+IFOREST_SUMMARY_PATH = MODELS_DIR  / "isolation_forest_summary.json"
+LSTM_SCORED_PATH     = CLEANED_DIR / "email_user_daily_lstm_scored.csv"
+LSTM_SUMMARY_PATH    = MODELS_DIR  / "lstm_autoencoder_summary.json"
 
 FEATURE_COLUMNS = [
     "email_count", "unique_pcs", "total_size", "avg_size",

@@ -1,16 +1,26 @@
-# Python
-__pycache__/
-*.pyc
-.venv/
-
-# Data (CRUCIAL)
+# ── Data directories (store on Google Drive, not GitHub) ─────────────────────
 archive/
 cleaned/
-*.csv
-
-# Models
 models/
+plots/
+*.csv
 *.pkl
 
-# Misc
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
+Thumbs.db
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
