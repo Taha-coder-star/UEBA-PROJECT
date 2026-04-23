@@ -35,7 +35,9 @@ IFOREST_FEATURES = [
     "after_hours_ratio", "bcc_ratio", "o", "c", "e", "a", "n",
 ]
 
-SPLIT_COLORS = {"train": "#4C9BE8", "val": "#F4A83A", "test": "#E85454"}
+SPLIT_COLORS    = {"train": "#4C9BE8", "val": "#F4A83A", "test": "#E85454"}
+EVAL_REPORT_PATH = MODELS_DIR / "evaluation_report.json"
+INSIDERS_PATH    = _CODE_ROOT / "archive" / "answers" / "answers" / "insiders.csv"
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +71,32 @@ def load_lstm_scored() -> pd.DataFrame:
 @st.cache_data
 def load_lstm_summary() -> dict:
     return json.loads(LSTM_SUMMARY_PATH.read_text(encoding="utf-8"))
+
+
+@st.cache_data
+def load_eval_report() -> dict | None:
+    if not EVAL_REPORT_PATH.exists():
+        return None
+    return json.loads(EVAL_REPORT_PATH.read_text(encoding="utf-8"))
+
+
+@st.cache_data
+def load_insider_labels() -> pd.DataFrame | None:
+    if not INSIDERS_PATH.exists():
+        return None
+    ins = pd.read_csv(INSIDERS_PATH)
+    ins = ins[ins["dataset"] == 4.2].copy()
+    ins["start"] = pd.to_datetime(ins["start"], errors="coerce").dt.normalize()
+    ins["end"]   = pd.to_datetime(ins["end"],   errors="coerce").dt.normalize()
+    rows = []
+    for _, r in ins.iterrows():
+        if pd.isna(r["start"]) or pd.isna(r["end"]):
+            continue
+        for d in pd.date_range(r["start"], r["end"], freq="D"):
+            rows.append({"user": r["user"], "email_day": d})
+    day_labels = pd.DataFrame(rows).drop_duplicates()
+    day_labels["is_insider"] = 1
+    return day_labels
 
 
 # ---------------------------------------------------------------------------
@@ -554,6 +582,187 @@ def render_live_scoring(artifacts: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tab 7 — Ground Truth Evaluation
+# ---------------------------------------------------------------------------
+
+def _confusion_heatmap(tp: int, fp: int, tn: int, fn: int, title: str) -> plt.Figure:
+    cm = np.array([[tn, fp], [fn, tp]])
+    fig, ax = plt.subplots(figsize=(4, 3.2))
+    im = ax.imshow(cm, cmap="Blues")
+    ax.set_xticks([0, 1]); ax.set_yticks([0, 1])
+    ax.set_xticklabels(["Pred Normal", "Pred Anomaly"])
+    ax.set_yticklabels(["Actual Normal", "Actual Insider"])
+    for i in range(2):
+        for j in range(2):
+            ax.text(j, i, f"{cm[i,j]:,}", ha="center", va="center",
+                    color="white" if cm[i, j] > cm.max() / 2 else "black",
+                    fontsize=13, fontweight="bold")
+    ax.set_title(title, fontsize=10)
+    fig.colorbar(im, ax=ax, fraction=0.046)
+    fig.tight_layout()
+    return fig
+
+
+def render_evaluation(iforest_df: pd.DataFrame, lstm_df: pd.DataFrame | None) -> None:
+    st.header("Ground Truth Evaluation — CERT r4.2")
+    st.caption(
+        "70 known insider users (dataset 4.2) evaluated against both models. "
+        "Metrics computed on the held-out **test split** at day level, and across "
+        "all data at user level (max score per user)."
+    )
+
+    report = load_eval_report()
+    if report is None:
+        st.warning(
+            "Evaluation report not found. Run:\n\n"
+            "```\npython scripts/evaluate_models.py "
+            "--answers archive/answers/answers/insiders.csv\n```"
+        )
+        return
+
+    # ── 1. Summary metric table ──────────────────────────────────────────────
+    st.subheader("Metrics Summary")
+
+    keys    = ["roc_auc", "avg_precision", "precision", "recall", "f1"]
+    labels  = ["ROC AUC", "Avg Precision (AP)", "Precision", "Recall", "F1"]
+    sections = {
+        "IF — Day (test)":   report.get("if_day_test",  {}),
+        "IF — User (all)":   report.get("if_user_all",  {}),
+        "LSTM — Day (test)": report.get("lstm_day_test",{}),
+        "LSTM — User (all)": report.get("lstm_user_all",{}),
+    }
+    table_rows = []
+    for label, data in sections.items():
+        row = {"Model / Level": label}
+        row.update({lbl: data.get(k, "—") for k, lbl in zip(keys, labels)})
+        table_rows.append(row)
+    st.dataframe(pd.DataFrame(table_rows).set_index("Model / Level"), use_container_width=True)
+
+    st.info(
+        "**Interpretation:** IF day-level ROC AUC < 0.5 means insider days look "
+        "*more normal* to the email-based IF model — insiders are behaviorally subtle. "
+        "LSTM (0.60) better captures temporal shifts in behavior over its 7-day window."
+    )
+
+    # ── 2. Confusion matrices ────────────────────────────────────────────────
+    st.subheader("Confusion Matrices")
+    col1, col2, col3, col4 = st.columns(4)
+    for col, (title, key) in zip(
+        [col1, col2, col3, col4],
+        [("IF Day (test)", "if_day_test"), ("IF User (all)", "if_user_all"),
+         ("LSTM Day (test)", "lstm_day_test"), ("LSTM User (all)", "lstm_user_all")],
+    ):
+        d = report.get(key, {})
+        if d:
+            fig = _confusion_heatmap(d["tp"], d["fp"], d["tn"], d["fn"], title)
+            col.pyplot(fig)
+
+    # ── 3. Score distributions: insiders vs normals ─────────────────────────
+    day_labels = load_insider_labels()
+    if day_labels is not None and iforest_df is not None:
+        st.subheader("Score Distributions: Insiders vs Normal Users")
+
+        if_merged = iforest_df[iforest_df["dataset_split"] == "test"].merge(
+            day_labels, on=["user", "email_day"], how="left"
+        )
+        if_merged["is_insider"] = if_merged["is_insider"].fillna(0).astype(int)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            fig, ax = plt.subplots(figsize=(6, 3.5))
+            for label, mask, color in [
+                ("Normal",  if_merged["is_insider"] == 0, "#4C9BE8"),
+                ("Insider", if_merged["is_insider"] == 1, "#E85454"),
+            ]:
+                scores = if_merged.loc[mask, "iforest_score"].dropna()
+                ax.hist(scores, bins=50, alpha=0.6, color=color, label=f"{label} (n={len(scores):,})", density=True)
+            ax.set_xlabel("Isolation Forest Score")
+            ax.set_ylabel("Density")
+            ax.set_title("IF Score — Insider vs Normal (test)")
+            ax.legend()
+            fig.tight_layout()
+            st.pyplot(fig)
+
+        if lstm_df is not None:
+            lstm_merged = lstm_df[
+                (lstm_df["dataset_split"] == "test") &
+                (lstm_df["lstm_risk_severity"] != "undetermined")
+            ].merge(day_labels, on=["user", "email_day"], how="left")
+            lstm_merged["is_insider"] = lstm_merged["is_insider"].fillna(0).astype(int)
+
+            with col2:
+                fig, ax = plt.subplots(figsize=(6, 3.5))
+                for label, mask, color in [
+                    ("Normal",  lstm_merged["is_insider"] == 0, "#4C9BE8"),
+                    ("Insider", lstm_merged["is_insider"] == 1, "#E85454"),
+                ]:
+                    scores = lstm_merged.loc[mask, "lstm_score"].dropna()
+                    ax.hist(scores, bins=50, alpha=0.6, color=color,
+                            label=f"{label} (n={len(scores):,})", density=True)
+                ax.set_xlabel("LSTM Score")
+                ax.set_ylabel("Density")
+                ax.set_title("LSTM Score — Insider vs Normal (test)")
+                ax.legend()
+                fig.tight_layout()
+                st.pyplot(fig)
+
+    # ── 4. Per-insider user scores ───────────────────────────────────────────
+    if day_labels is not None and iforest_df is not None:
+        st.subheader("Insider Users — Model Scores")
+        insider_users = day_labels["user"].unique()
+
+        if_user_scores = (
+            iforest_df[iforest_df["user"].isin(insider_users)]
+            .groupby("user")["iforest_score"].max()
+            .rename("if_max_score")
+        )
+        rows_data = []
+        for u in insider_users:
+            row_d = {"user": u, "if_max_score": round(float(if_user_scores.get(u, 0)), 4)}
+            if lstm_df is not None:
+                lu = lstm_df[(lstm_df["user"] == u) & (lstm_df["lstm_risk_severity"] != "undetermined")]
+                row_d["lstm_max_score"] = round(float(lu["lstm_score"].max()) if not lu.empty else 0, 4)
+            rows_data.append(row_d)
+
+        insider_table = pd.DataFrame(rows_data).sort_values("if_max_score", ascending=False)
+        insider_table["if_caught"]   = insider_table["if_max_score"] >= 0.496
+        if "lstm_max_score" in insider_table.columns:
+            insider_table["lstm_caught"] = insider_table["lstm_max_score"] >= 0.723
+
+        st.dataframe(insider_table, use_container_width=True)
+
+        # Summary caught/missed
+        st.subheader("Detection Summary")
+        c1, c2, c3, c4 = st.columns(4)
+        n = len(insider_users)
+        if_caught   = int(insider_table["if_caught"].sum())
+        lstm_caught = int(insider_table["lstm_caught"].sum()) if "lstm_caught" in insider_table.columns else 0
+        c1.metric("Total Insiders", n)
+        c2.metric("IF Caught (user-level)", f"{if_caught} / {n}")
+        c3.metric("LSTM Caught (user-level)", f"{lstm_caught} / {n}")
+        both = int((insider_table.get("if_caught", False) & insider_table.get("lstm_caught", False)).sum()) \
+               if "lstm_caught" in insider_table.columns else 0
+        c4.metric("Caught by Both", f"{both} / {n}")
+
+        # Bar: caught vs missed per model
+        fig, ax = plt.subplots(figsize=(6, 2.5))
+        models  = ["Isolation Forest", "LSTM Autoencoder"]
+        caught  = [if_caught, lstm_caught]
+        missed  = [n - if_caught, n - lstm_caught]
+        ax.barh(models, caught, color="#6FCF97", label="Caught")
+        ax.barh(models, missed, left=caught, color="#E85454", label="Missed")
+        for i, (c, m) in enumerate(zip(caught, missed)):
+            ax.text(c / 2, i, str(c), ha="center", va="center", color="white", fontweight="bold")
+            ax.text(c + m / 2, i, str(m), ha="center", va="center", color="white", fontweight="bold")
+        ax.set_xlabel("Number of Insider Users")
+        ax.set_title(f"Insider Detection: Caught vs Missed (out of {n})")
+        ax.legend(loc="lower right")
+        fig.tight_layout()
+        st.pyplot(fig)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -587,6 +796,7 @@ def main() -> None:
         "Model Comparison",
         "User Investigation",
         "Live Scoring",
+        "Evaluation (Ground Truth)",
     ])
 
     with tabs[0]:
@@ -612,6 +822,9 @@ def main() -> None:
 
     with tabs[5]:
         render_live_scoring(iforest_artifacts)
+
+    with tabs[6]:
+        render_evaluation(iforest_df, lstm_df)
 
 
 if __name__ == "__main__":
