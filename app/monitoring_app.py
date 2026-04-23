@@ -37,7 +37,7 @@ IFOREST_FEATURES = [
 
 SPLIT_COLORS    = {"train": "#4C9BE8", "val": "#F4A83A", "test": "#E85454"}
 EVAL_REPORT_PATH = MODELS_DIR / "evaluation_report.json"
-INSIDERS_PATH    = _CODE_ROOT / "archive" / "answers" / "answers" / "insiders.csv"
+INSIDERS_PATH    = ARCHIVE_DIR / "answers" / "answers" / "insiders.csv"
 
 
 # ---------------------------------------------------------------------------
