@@ -32,6 +32,18 @@ SUMMARY_OUTPUT = CLEANED_DIR / "cleaning_summary.txt"
 CHUNK_SIZE = 200_000
 
 
+def iter_csv_chunks(path: Path, *, tolerate_bad_lines: bool = False):
+    """Yield CSV chunks with an optional tolerant parser for malformed rows."""
+    kwargs = {"chunksize": CHUNK_SIZE}
+    if tolerate_bad_lines:
+        print(
+            f"Reading {path.name} with the tolerant parser; malformed CSV rows "
+            "will be skipped with a warning."
+        )
+        kwargs.update({"engine": "python", "on_bad_lines": "warn"})
+    return pd.read_csv(path, **kwargs)
+
+
 def count_recipients(value: object) -> int:
     if pd.isna(value):
         return 0
@@ -344,8 +356,16 @@ def main() -> None:
     max_date = None
     total_clean_rows = 0
     seen_ids = set()
+    total_logon_rows = 0
+    total_device_rows = 0
+    total_file_rows = 0
+    decoy_clean = pd.DataFrame()
+    users_clean = pd.DataFrame()
 
-    for chunk_index, chunk in enumerate(pd.read_csv(EMAIL_INPUT, chunksize=CHUNK_SIZE), start=1):
+    for chunk_index, chunk in enumerate(
+        iter_csv_chunks(EMAIL_INPUT, tolerate_bad_lines=True),
+        start=1,
+    ):
         cleaned = clean_email_chunk(chunk)
         cleaned = cleaned[~cleaned["id"].isin(seen_ids)].copy()
         seen_ids.update(cleaned["id"].tolist())
@@ -378,6 +398,13 @@ def main() -> None:
             chunk_summaries.append(f"chunk_{chunk_index}_rows={len(cleaned)}")
             print(f"Processed chunk {chunk_index}: {len(cleaned)} cleaned rows")
 
+    if not summary_rows:
+        raise RuntimeError(
+            "No cleaned email rows were produced from archive/email.csv. "
+            "The source file may be missing expected columns or contain too "
+            "many malformed rows to parse safely."
+        )
+
     psychometric_df = pd.read_csv(PSY_INPUT)
     psychometric_clean = clean_psychometric_data(psychometric_df)
     psychometric_clean.to_csv(PSY_OUTPUT, index=False)
@@ -391,8 +418,7 @@ def main() -> None:
             LOGON_OUTPUT.unlink()
         logon_header_written = False
         logon_seen_ids: set = set()
-        total_logon_rows = 0
-        for chunk in pd.read_csv(LOGON_INPUT, chunksize=CHUNK_SIZE):
+        for chunk in iter_csv_chunks(LOGON_INPUT):
             cleaned_logon = clean_logon_chunk(chunk)
             cleaned_logon = cleaned_logon[~cleaned_logon["id"].isin(logon_seen_ids)].copy()
             logon_seen_ids.update(cleaned_logon["id"].tolist())
@@ -411,8 +437,7 @@ def main() -> None:
             DEVICE_OUTPUT.unlink()
         device_header_written = False
         device_seen_ids: set = set()
-        total_device_rows = 0
-        for chunk in pd.read_csv(DEVICE_INPUT, chunksize=CHUNK_SIZE):
+        for chunk in iter_csv_chunks(DEVICE_INPUT):
             cleaned_device = clean_device_chunk(chunk)
             cleaned_device = cleaned_device[~cleaned_device["id"].isin(device_seen_ids)].copy()
             device_seen_ids.update(cleaned_device["id"].tolist())
@@ -431,8 +456,7 @@ def main() -> None:
             FILE_OUTPUT.unlink()
         file_header_written = False
         file_seen_ids: set = set()
-        total_file_rows = 0
-        for chunk in pd.read_csv(FILE_INPUT, chunksize=CHUNK_SIZE):
+        for chunk in iter_csv_chunks(FILE_INPUT):
             cleaned_file = clean_file_chunk(chunk)
             cleaned_file = cleaned_file[~cleaned_file["id"].isin(file_seen_ids)].copy()
             file_seen_ids.update(cleaned_file["id"].tolist())
@@ -483,31 +507,50 @@ def main() -> None:
     daily_features["bcc_ratio"] = daily_features["bcc_email_count"] / daily_features["email_count"]
 
     # --- Merge logon features ---
-    print("Aggregating logon events...")
-    logon_daily = aggregate_logon_daily(LOGON_INPUT)
-    logon_daily = logon_daily.rename(columns={"day": "email_day"})
-    daily_features = daily_features.merge(logon_daily, on=["user", "email_day"], how="left")
-    for col in ["logon_count", "logoff_count", "after_hours_logons", "unique_logon_pcs"]:
-        daily_features[col] = daily_features[col].fillna(0).astype(int)
-    print(f"  Logon user-days: {len(logon_daily)}")
+    if LOGON_INPUT.exists():
+        print("Aggregating logon events...")
+        logon_daily = aggregate_logon_daily(LOGON_INPUT)
+        logon_daily = logon_daily.rename(columns={"day": "email_day"})
+        daily_features = daily_features.merge(logon_daily, on=["user", "email_day"], how="left")
+        for col in ["logon_count", "logoff_count", "after_hours_logons", "unique_logon_pcs"]:
+            daily_features[col] = daily_features[col].fillna(0).astype(int)
+        print(f"  Logon user-days: {len(logon_daily)}")
+    else:
+        logon_daily = pd.DataFrame(
+            columns=["user", "email_day", "logon_count", "logoff_count", "after_hours_logons", "unique_logon_pcs"]
+        )
+        for col in ["logon_count", "logoff_count", "after_hours_logons", "unique_logon_pcs"]:
+            daily_features[col] = 0
 
     # --- Merge device features ---
-    print("Aggregating device events...")
-    device_daily = aggregate_device_daily(DEVICE_INPUT)
-    device_daily = device_daily.rename(columns={"day": "email_day"})
-    daily_features = daily_features.merge(device_daily, on=["user", "email_day"], how="left")
-    for col in ["usb_connect_count", "usb_disconnect_count"]:
-        daily_features[col] = daily_features[col].fillna(0).astype(int)
-    print(f"  Device user-days: {len(device_daily)}")
+    if DEVICE_INPUT.exists():
+        print("Aggregating device events...")
+        device_daily = aggregate_device_daily(DEVICE_INPUT)
+        device_daily = device_daily.rename(columns={"day": "email_day"})
+        daily_features = daily_features.merge(device_daily, on=["user", "email_day"], how="left")
+        for col in ["usb_connect_count", "usb_disconnect_count"]:
+            daily_features[col] = daily_features[col].fillna(0).astype(int)
+        print(f"  Device user-days: {len(device_daily)}")
+    else:
+        device_daily = pd.DataFrame(columns=["user", "email_day", "usb_connect_count", "usb_disconnect_count"])
+        for col in ["usb_connect_count", "usb_disconnect_count"]:
+            daily_features[col] = 0
 
     # --- Merge file features ---
-    print("Aggregating file access events...")
-    file_daily = aggregate_file_daily(FILE_INPUT)
-    file_daily = file_daily.rename(columns={"day": "email_day"})
-    daily_features = daily_features.merge(file_daily, on=["user", "email_day"], how="left")
-    for col in ["file_total", "file_to_removable", "file_from_removable", "file_write_count", "file_after_hours"]:
-        daily_features[col] = daily_features[col].fillna(0).astype(int)
-    print(f"  File user-days: {len(file_daily)}")
+    if FILE_INPUT.exists():
+        print("Aggregating file access events...")
+        file_daily = aggregate_file_daily(FILE_INPUT)
+        file_daily = file_daily.rename(columns={"day": "email_day"})
+        daily_features = daily_features.merge(file_daily, on=["user", "email_day"], how="left")
+        for col in ["file_total", "file_to_removable", "file_from_removable", "file_write_count", "file_after_hours"]:
+            daily_features[col] = daily_features[col].fillna(0).astype(int)
+        print(f"  File user-days: {len(file_daily)}")
+    else:
+        file_daily = pd.DataFrame(
+            columns=["user", "email_day", "file_total", "file_to_removable", "file_from_removable", "file_write_count", "file_after_hours"]
+        )
+        for col in ["file_total", "file_to_removable", "file_from_removable", "file_write_count", "file_after_hours"]:
+            daily_features[col] = 0
 
     # --- Per-user chronological 70/15/15 split ---
     daily_features = assign_split(daily_features, date_col="email_day")

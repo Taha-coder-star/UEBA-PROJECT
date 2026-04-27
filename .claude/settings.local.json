@@ -8,7 +8,9 @@
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
       "Bash(python3 *)",
-      "Bash(py -3 -c ' *)"
+      "Bash(py -3 -c ' *)",
+      "Bash(py -3 -c \"import os; os.makedirs\\('plots/user_level', exist_ok=True\\); print\\('ok'\\)\")",
+      "Bash(git commit -m 'feat: add UEBA dashboard, risk scorer, user-level eval, and visualizations *)"
     ]
   }
 }
