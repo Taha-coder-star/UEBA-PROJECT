@@ -34,7 +34,14 @@ REQUIRED_RAW_FILES = [
     "logon.csv",
     "device.csv",
     "psychometric.csv",
+    # users.csv is not included in the CERT r4.2 Kaggle mirror; the cleaning
+    # script skips it gracefully when absent, so it must not be required here.
+]
+
+OPTIONAL_RAW_FILES = [
     "users.csv",
+    "ldap.csv",
+    "decoy_file.csv",
 ]
 
 KAGGLE_DATASET = "mrajaxnp/cert-insider-threat-detection-research"
@@ -108,11 +115,17 @@ def validate_raw_inputs() -> None:
     archive_dir = DATA_ROOT / "archive"
     normalize_archive_layout()
     missing = [name for name in REQUIRED_RAW_FILES if not (archive_dir / name).exists()]
+    missing_optional = [name for name in OPTIONAL_RAW_FILES if not (archive_dir / name).exists()]
     if missing:
         raise FileNotFoundError(
             "Missing raw CERT files in "
             f"{archive_dir}: {', '.join(missing)}\n"
             "Run with --download-data after uploading kaggle.json, or place the CSVs manually."
+        )
+    if missing_optional:
+        print(
+            "[INFO] Optional raw files not found and will be skipped: "
+            + ", ".join(missing_optional)
         )
 
 
