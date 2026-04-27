@@ -440,9 +440,14 @@ def main() -> None:
             "many malformed rows to parse safely."
         )
 
-    psychometric_df = pd.read_csv(PSY_INPUT)
-    psychometric_clean = clean_psychometric_data(psychometric_df)
-    psychometric_clean.to_csv(PSY_OUTPUT, index=False)
+    if not PSY_INPUT.exists():
+        print("Skipping psychometric data (psychometric.csv not found in archive).")
+        psychometric_clean = pd.DataFrame(columns=["employee_name", "user_id", "o", "c", "e", "a", "n"])
+        psychometric_clean.to_csv(PSY_OUTPUT, index=False)
+    else:
+        psychometric_df = pd.read_csv(PSY_INPUT)
+        psychometric_clean = clean_psychometric_data(psychometric_df)
+        psychometric_clean.to_csv(PSY_OUTPUT, index=False)
 
     # --- Clean logon (row-level) ---
     if not LOGON_INPUT.exists():
@@ -592,6 +597,17 @@ def main() -> None:
     daily_features.to_csv(USER_DAILY_OUTPUT, index=False)
 
     merged = daily_features.merge(psychometric_clean, left_on="user", right_on="user_id", how="left")
+    if "employee_name" not in merged.columns:
+        merged["employee_name"] = merged["user"]
+    else:
+        merged["employee_name"] = merged["employee_name"].fillna(merged["user"])
+    if "user_id" not in merged.columns:
+        merged["user_id"] = merged["user"]
+    else:
+        merged["user_id"] = merged["user_id"].fillna(merged["user"])
+    for col in ["o", "c", "e", "a", "n"]:
+        if col not in merged.columns:
+            merged[col] = 0.0
     merged.to_csv(MERGED_OUTPUT, index=False)
 
     # Compute global date cutoffs from the email data for row-level CSV splits
