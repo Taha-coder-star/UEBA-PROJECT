@@ -31,11 +31,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-REPO_DIR = Path(os.environ.get("DLP_REPO", "/content/dlp-project"))
+REPO_DIR = Path(os.environ.get("DLP_REPO", str(Path(__file__).resolve().parent.parent)))
 sys.path.insert(0, str(REPO_DIR))
 from config import CLEANED_DIR  # noqa: E402
+from ground_truth import describe_selection, select_ground_truth_release  # noqa: E402
 
-INSIDERS_CSV = REPO_DIR / "archive" / "answers" / "answers" / "insiders.csv"
 IFOREST_CSV  = CLEANED_DIR / "email_user_daily_scored.csv"
 LSTM_CSV     = CLEANED_DIR / "email_user_daily_lstm_scored.csv"
 
@@ -246,7 +246,7 @@ def print_agg_comparison(records: list[dict]) -> None:
 # Step 10 -- summary
 # =============================================================================
 
-def print_summary(records: list[dict]) -> None:
+def print_summary(records: list[dict], n_insiders: int) -> None:
     df   = pd.DataFrame(records)
     best = df.sort_values("f1", ascending=False).iloc[0]
     w    = 65
@@ -260,7 +260,7 @@ def print_summary(records: list[dict]) -> None:
     print(f"  Precision  : {best['precision']:.4f}")
     print(f"  Recall     : {best['recall']:.4f}")
     print(f"  F1         : {best['f1']:.4f}")
-    print(f"  TP         : {int(best['tp'])} / 70 insiders detected")
+    print(f"  TP         : {int(best['tp'])} / {n_insiders} insiders detected")
     print("=" * w)
     print()
     print("  Key findings:")
@@ -280,15 +280,10 @@ def print_summary(records: list[dict]) -> None:
 # =============================================================================
 
 def main() -> None:
-    if not INSIDERS_CSV.exists():
-        raise FileNotFoundError(
-            f"insiders.csv not found at {INSIDERS_CSV}\n"
-            "Ensure the repo is cloned to /content/dlp-project or set DLP_REPO."
-        )
-
-    ins = pd.read_csv(INSIDERS_CSV)
-    insider_users = set(ins.loc[ins["dataset"] == 4.2, "user"].unique())
-    print(f"Ground truth: {len(insider_users)} insider users (CERT r4.2)\n")
+    gt = select_ground_truth_release([IFOREST_CSV, LSTM_CSV])
+    insider_users = gt.matching_users
+    print("Ground truth:")
+    print(f"  {describe_selection(gt)}\n")
 
     all_records: list[dict] = []
 
@@ -316,7 +311,7 @@ def main() -> None:
 
     if all_records:
         print_agg_comparison(all_records)  # Step 8
-        print_summary(all_records)         # Step 10
+        print_summary(all_records, len(insider_users))  # Step 10
 
 
 if __name__ == "__main__":

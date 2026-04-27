@@ -22,7 +22,7 @@ import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 
-REPO_DIR = Path(os.environ.get("DLP_REPO", "/content/dlp-project"))
+REPO_DIR = Path(os.environ.get("DLP_REPO", str(Path(__file__).resolve().parent.parent)))
 sys.path.insert(0, str(REPO_DIR))
 sys.path.insert(0, str(REPO_DIR / "colab"))
 from config import CLEANED_DIR  # noqa: E402
@@ -32,8 +32,8 @@ from user_level_eval import (  # noqa: E402
 from risk_scorer import (  # noqa: E402
     compute_behavioral_signals, compute_risk_scores,
 )
+from ground_truth import describe_selection, select_ground_truth_release  # noqa: E402
 
-INSIDERS_CSV = REPO_DIR / "archive" / "answers" / "answers" / "insiders.csv"
 IFOREST_CSV  = CLEANED_DIR / "email_user_daily_scored.csv"
 LSTM_CSV     = CLEANED_DIR / "email_user_daily_lstm_scored.csv"
 OUT_DIR      = REPO_DIR / "plots" / "user_level"
@@ -57,8 +57,10 @@ _cache: dict = {}
 def _load_all() -> None:
     if _cache:
         return
-    ins = pd.read_csv(INSIDERS_CSV)
-    _cache["insider_users"] = set(ins.loc[ins["dataset"] == 4.2, "user"].unique())
+    gt = select_ground_truth_release([IFOREST_CSV, LSTM_CSV])
+    _cache["ground_truth"] = gt
+    _cache["insider_users"] = gt.matching_users
+    print(f"Ground truth: {describe_selection(gt)}")
 
     ldf = pd.read_csv(LSTM_CSV,
                       usecols=["user", "lstm_score", "lstm_risk_severity", "dataset_split"])
@@ -281,7 +283,7 @@ def plot_top_users_risk() -> Path:
 
     ax.set_xlabel("Weighted Risk Score", fontsize=11)
     ax.set_title("Top 20 Suspicious Users by Risk Score\n"
-                 "* = confirmed CERT r4.2 insider", **STYLE)
+                 f"* = confirmed CERT {_cache['ground_truth'].dataset} insider", **STYLE)
     ax.set_xlim(0, top20["risk_score"].max() + 0.07)
     ax.grid(axis="x", alpha=0.3)
 

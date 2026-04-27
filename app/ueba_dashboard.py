@@ -38,8 +38,8 @@ from risk_scorer import (  # noqa: E402
     load_sensitivity_signals,
     WEIGHTS, _GA_LOADED,
 )
+from ground_truth import describe_selection, find_insiders_csv, select_ground_truth_release  # noqa: E402
 
-INSIDERS_CSV       = _ROOT / "archive" / "answers" / "answers" / "insiders.csv"
 IFOREST_CSV        = CLEANED_DIR / "email_user_daily_scored.csv"
 LSTM_CSV           = CLEANED_DIR / "email_user_daily_lstm_scored.csv"
 SENSITIVITY_CSV    = CLEANED_DIR / "content_sensitivity_daily.csv"
@@ -72,10 +72,28 @@ st.set_page_config(
 
 @st.cache_data
 def load_insider_users() -> set[str]:
-    if not INSIDERS_CSV.exists():
+    if not IFOREST_CSV.exists() and not LSTM_CSV.exists():
         return set()
-    ins = pd.read_csv(INSIDERS_CSV)
-    return set(ins.loc[ins["dataset"] == 4.2, "user"].unique())
+    try:
+        return select_ground_truth_release([IFOREST_CSV, LSTM_CSV]).matching_users
+    except Exception:
+        return set()
+
+
+@st.cache_data
+def load_ground_truth_description() -> str:
+    try:
+        return describe_selection(select_ground_truth_release([IFOREST_CSV, LSTM_CSV]))
+    except Exception as exc:
+        return f"Ground truth unavailable: {exc}"
+
+
+def ground_truth_available() -> bool:
+    try:
+        find_insiders_csv()
+        return True
+    except FileNotFoundError:
+        return False
 
 
 @st.cache_data
@@ -359,13 +377,16 @@ def main() -> None:
     # ── Header ───────────────────────────────────────────────────────────────
     title_suffix = " · GA-Optimized" if _GA_LOADED else ""
     st.title(f"🔒 UEBA — Insider Threat Detection System{title_suffix}")
+    gt_description = load_ground_truth_description()
     st.markdown(
-        "**User and Entity Behaviour Analytics** pipeline built on the CERT r4.2 "
-        "insider threat dataset. Detects suspicious users using an LSTM Autoencoder "
+        "**User and Entity Behaviour Analytics** pipeline built on the CERT "
+        "insider threat dataset. The dashboard auto-selects the answer-key release "
+        "that matches the scored users. Detects suspicious users using an LSTM Autoencoder "
         "combined with a weighted behavioural risk scoring algorithm"
         + (" with **Genetic Algorithm-optimised weights**." if _GA_LOADED
            else " with domain-knowledge weights.")
     )
+    st.caption(gt_description)
     st.markdown("---")
 
     # ── Sensitivity availability check ───────────────────────────────────────
@@ -409,7 +430,7 @@ def main() -> None:
         index=3,
     )
     show_ground_truth = st.sidebar.checkbox(
-        "Show ground-truth labels", value=INSIDERS_CSV.exists()
+        "Show ground-truth labels", value=ground_truth_available()
     )
     run_btn = st.sidebar.button("▶  Run Analysis", type="primary")
 
@@ -680,7 +701,7 @@ This system implements a *multi-signal evidence aggregation* algorithm:
             f"Threshold: **90th percentile** | K = **{m.get('k', 50)}**  \n"
             f"→ GA F1 = **{m.get('f1', 0):.4f}** "
             f"(baseline {bm.get('f1', 0):.4f}, Δ{im.get('delta_f1', 0):+.4f})  "
-            f"| **{m.get('tp', 0)} / 70 insiders detected**  \n\n"
+            f"| **{m.get('tp', 0)} / {len(insider_users)} insiders detected**  \n\n"
             f"At K=20, Precision rises to **0.50** — half of the flagged users are real insiders.  \n"
             "Isolation Forest is not recommended: it scores insiders *lower* than normal users (ROC AUC < 0.5)."
         )
@@ -689,7 +710,8 @@ This system implements a *multi-signal evidence aggregation* algorithm:
             "**Best overall setup (from user-level evaluation):**  \n"
             "Model: **LSTM Autoencoder** | Aggregation: **score_p95** | "
             "Threshold: **90th percentile** | K = **50**  \n"
-            "→ Precision = 0.32 | Recall = 0.23 | F1 = 0.27 | **16 / 70 insiders detected**  \n\n"
+            f"→ Precision/Recall/F1 depend on the auto-selected CERT release; "
+            f"currently tracking **{len(insider_users)} matching insider users**.  \n\n"
             "At K=20, Precision rises to **0.50** — half of the flagged users are real insiders.  \n"
             "Isolation Forest is not recommended: it scores insiders *lower* than normal users (ROC AUC < 0.5)."
         )

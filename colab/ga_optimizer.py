@@ -42,8 +42,8 @@ import pandas as pd
 REPO_DIR = Path(os.environ.get("DLP_REPO", str(Path(__file__).resolve().parent.parent)))
 sys.path.insert(0, str(REPO_DIR))
 from config import CLEANED_DIR, MODELS_DIR  # noqa: E402
+from ground_truth import GroundTruthSelection, describe_selection, select_ground_truth_release  # noqa: E402
 
-INSIDERS_CSV = REPO_DIR / "archive" / "answers" / "answers" / "insiders.csv"
 LSTM_CSV     = CLEANED_DIR / "email_user_daily_lstm_scored.csv"
 IFOREST_CSV  = CLEANED_DIR / "email_user_daily_scored.csv"
 
@@ -104,24 +104,23 @@ def _minmax(series: pd.Series) -> pd.Series:
     return (series - lo) / (hi - lo)
 
 
-def load_data() -> tuple[np.ndarray, np.ndarray, set[str]]:
-    """Return (norm_signals_matrix, user_ids, insider_users).
+def load_data() -> tuple[np.ndarray, np.ndarray, set[str], GroundTruthSelection]:
+    """Return (norm_signals_matrix, user_ids, insider_users, gt_selection).
 
     norm_signals_matrix: shape (n_users, 6) — each column is one normalised
                          signal, ready for dot-product with the weight vector.
     user_ids            : numpy array of user strings (same order as rows).
     insider_users       : ground-truth set from insiders.csv.
     """
-    for path in (INSIDERS_CSV, LSTM_CSV, IFOREST_CSV):
+    for path in (LSTM_CSV, IFOREST_CSV):
         if not path.exists():
             raise FileNotFoundError(
                 f"Required file missing: {path}\n"
                 "Run the full pipeline first to produce scored CSVs."
             )
 
-    # Ground truth
-    ins = pd.read_csv(INSIDERS_CSV)
-    insider_users: set[str] = set(ins.loc[ins["dataset"] == 4.2, "user"].unique())
+    gt = select_ground_truth_release([LSTM_CSV, IFOREST_CSV])
+    insider_users = gt.matching_users
 
     # LSTM: per-user p95 score
     lstm_df = pd.read_csv(LSTM_CSV, usecols=["user", "lstm_score",
@@ -172,7 +171,7 @@ def load_data() -> tuple[np.ndarray, np.ndarray, set[str]]:
     norm_matrix = df[SIGNAL_NORM_COLS].values.astype(np.float32)
     user_ids    = df["user"].values
 
-    return norm_matrix, user_ids, insider_users
+    return norm_matrix, user_ids, insider_users, gt
 
 
 # ===========================================================================
@@ -448,6 +447,7 @@ def save_outputs(
     pop_size: int,
     max_gens: int,
     elapsed: float,
+    gt: GroundTruthSelection,
 ) -> None:
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -466,6 +466,12 @@ def save_outputs(
                              + results["metrics_at_k"]["flag_coverage"] * FITNESS_BETA, 6),
         "f1_at_k":    results["metrics_at_k"]["f1"],
         "k":           results["metrics_at_k"]["k"],
+        "ground_truth": {
+            "cert_release": gt.dataset,
+            "insiders_csv": str(gt.insiders_path),
+            "matching_insider_users": gt.match_count,
+            "total_release_insider_users": gt.total_release_users,
+        },
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     GA_CONFIG_PATH.write_text(json.dumps(config, indent=2))
@@ -486,6 +492,14 @@ def save_outputs(
         },
         "baseline_weights":    dict(zip(SIGNAL_NAMES, BASELINE_WEIGHTS)),
         "baseline_thresholds": dict(zip(SIGNAL_NAMES, BASELINE_THRESHOLDS)),
+        "ground_truth": {
+            "cert_release": gt.dataset,
+            "insiders_csv": str(gt.insiders_path),
+            "matching_insider_users": gt.match_count,
+            "total_release_insider_users": gt.total_release_users,
+            "scored_users": gt.scored_user_count,
+            "release_match_counts": gt.release_match_counts,
+        },
         "results":             results,
         "elapsed_seconds":     round(elapsed, 1),
         "convergence_history": history,
@@ -516,9 +530,10 @@ def main() -> None:
     print("  GA Optimizer — UEBA+DLP Risk Scoring System")
     print("=" * 60)
     print(f"\n  Loading data from {CLEANED_DIR.name}/...")
-    norm_matrix, user_ids, insider_set = load_data()
+    norm_matrix, user_ids, insider_set, gt = load_data()
     n_users    = len(user_ids)
     n_insiders = len(insider_set & set(user_ids))
+    print(f"  {describe_selection(gt)}")
     print(f"  Users: {n_users}  |  Insiders: {n_insiders}  |  Signals: {len(SIGNAL_NAMES)}\n")
 
     t0 = time.time()
@@ -554,7 +569,7 @@ def main() -> None:
     print(f"\n  Elapsed: {elapsed:.1f}s")
 
     print("\n  Saving outputs...")
-    save_outputs(best_chrom, history, results, pop_size, max_gens, elapsed)
+    save_outputs(best_chrom, history, results, pop_size, max_gens, elapsed, gt)
     print("\nDone.\n")
 
 

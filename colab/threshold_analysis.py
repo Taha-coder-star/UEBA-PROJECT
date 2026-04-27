@@ -1,7 +1,7 @@
 """Threshold analysis — no retraining.
 
-Loads saved anomaly scores (Isolation Forest + LSTM), merges with CERT r4.2
-ground truth, and evaluates Precision / Recall / F1 at percentile thresholds
+Loads saved anomaly scores (Isolation Forest + LSTM), auto-selects the matching
+CERT ground truth, and evaluates Precision / Recall / F1 at percentile thresholds
 90, 95, 97, 99.  Results are printed at both day level (test split) and
 user level (max score per user, all splits).
 """
@@ -15,11 +15,11 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import precision_score, recall_score, f1_score
 
-REPO_DIR = Path(os.environ.get("DLP_REPO", "/content/dlp-project"))
+REPO_DIR = Path(os.environ.get("DLP_REPO", str(Path(__file__).resolve().parent.parent)))
 sys.path.insert(0, str(REPO_DIR))
 from config import CLEANED_DIR, MODELS_DIR  # noqa: E402
+from ground_truth import describe_selection, load_day_labels as load_cert_day_labels  # noqa: E402
 
-INSIDERS_CSV = REPO_DIR / "archive" / "answers" / "answers" / "insiders.csv"
 IFOREST_CSV  = CLEANED_DIR / "email_user_daily_scored.csv"
 LSTM_CSV     = CLEANED_DIR / "email_user_daily_lstm_scored.csv"
 
@@ -29,18 +29,7 @@ PERCENTILES  = [90, 95, 97, 99]
 # ── Ground truth ─────────────────────────────────────────────────────────────
 
 def load_day_labels() -> pd.DataFrame:
-    ins = pd.read_csv(INSIDERS_CSV)
-    ins = ins[ins["dataset"] == 4.2].copy()
-    ins["start"] = pd.to_datetime(ins["start"], errors="coerce").dt.normalize()
-    ins["end"]   = pd.to_datetime(ins["end"],   errors="coerce").dt.normalize()
-    rows = []
-    for _, r in ins.iterrows():
-        if pd.isna(r["start"]) or pd.isna(r["end"]):
-            continue
-        for d in pd.date_range(r["start"], r["end"], freq="D"):
-            rows.append({"user": r["user"], "email_day": d})
-    labels = pd.DataFrame(rows).drop_duplicates()
-    labels["is_insider"] = 1
+    labels, _ = load_cert_day_labels([IFOREST_CSV, LSTM_CSV])
     return labels
 
 
@@ -129,15 +118,10 @@ def analyse(
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    if not INSIDERS_CSV.exists():
-        raise FileNotFoundError(
-            f"insiders.csv not found at {INSIDERS_CSV}\n"
-            "Ensure the repo is cloned to /content/dlp-project or set DLP_REPO."
-        )
-
-    day_labels = load_day_labels()
-    print(f"Ground truth loaded: {day_labels['user'].nunique()} insider users, "
-          f"{len(day_labels):,} insider-days")
+    day_labels, gt = load_cert_day_labels([IFOREST_CSV, LSTM_CSV])
+    print("Ground truth:")
+    print(f"  {describe_selection(gt)}")
+    print(f"  Insider user-days in selected release: {len(day_labels):,}")
 
     if IFOREST_CSV.exists():
         idf = pd.read_csv(IFOREST_CSV, usecols=["user", "email_day", "iforest_score", "dataset_split"])

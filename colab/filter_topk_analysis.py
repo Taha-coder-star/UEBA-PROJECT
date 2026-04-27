@@ -15,11 +15,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-REPO_DIR = Path(os.environ.get("DLP_REPO", "/content/dlp-project"))
+REPO_DIR = Path(os.environ.get("DLP_REPO", str(Path(__file__).resolve().parent.parent)))
 sys.path.insert(0, str(REPO_DIR))
 from config import CLEANED_DIR  # noqa: E402
+from ground_truth import describe_selection, select_ground_truth_release  # noqa: E402
 
-INSIDERS_CSV = REPO_DIR / "archive" / "answers" / "answers" / "insiders.csv"
 IFOREST_CSV  = CLEANED_DIR / "email_user_daily_scored.csv"
 LSTM_CSV     = CLEANED_DIR / "email_user_daily_lstm_scored.csv"
 
@@ -30,8 +30,7 @@ K_VALUES   = [10, 20, 50]
 # ── Ground truth ──────────────────────────────────────────────────────────────
 
 def load_insider_users() -> set[str]:
-    ins = pd.read_csv(INSIDERS_CSV)
-    return set(ins.loc[ins["dataset"] == 4.2, "user"].unique())
+    return select_ground_truth_release([IFOREST_CSV, LSTM_CSV]).matching_users
 
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
@@ -40,8 +39,8 @@ def compute_metrics(top_k_users: set[str], insider_users: set[str], k: int) -> d
     tp = len(top_k_users & insider_users)
     fp = k - tp
     fn = len(insider_users) - tp
-    prec   = tp / k
-    recall = tp / len(insider_users)
+    prec   = tp / k if k else 0.0
+    recall = tp / len(insider_users) if insider_users else 0.0
     f1     = 2 * prec * recall / (prec + recall) if (prec + recall) > 0 else 0.0
     return {"precision": prec, "recall": recall, "f1": f1, "tp": tp, "fp": fp, "fn": fn}
 
@@ -135,7 +134,7 @@ def analyse(
         print(
             f"  {pct}th pct (cutoff={cutoff:.4f}): "
             f"{len(filtered)} users pass filter  —  "
-            f"{ins_in} insiders retained ({ins_in/n_insiders*100:.1f}% recall)"
+            f"{ins_in} insiders retained ({ins_in/n_insiders*100 if n_insiders else 0.0:.1f}% recall)"
         )
     print()
 
@@ -143,14 +142,10 @@ def analyse(
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    if not INSIDERS_CSV.exists():
-        raise FileNotFoundError(
-            f"insiders.csv not found at {INSIDERS_CSV}\n"
-            "Ensure the repo is cloned to /content/dlp-project or set DLP_REPO."
-        )
-
-    insider_users = load_insider_users()
-    print(f"Ground truth: {len(insider_users)} insider users (CERT r4.2)\n")
+    gt = select_ground_truth_release([IFOREST_CSV, LSTM_CSV])
+    insider_users = gt.matching_users
+    print("Ground truth:")
+    print(f"  {describe_selection(gt)}\n")
 
     if IFOREST_CSV.exists():
         idf = pd.read_csv(IFOREST_CSV, usecols=["user", "iforest_score", "dataset_split"])
