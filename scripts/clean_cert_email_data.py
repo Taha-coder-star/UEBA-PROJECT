@@ -32,6 +32,51 @@ SUMMARY_OUTPUT = CLEANED_DIR / "cleaning_summary.txt"
 CHUNK_SIZE = 200_000
 
 
+def normalize_file_schema(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize file.csv variants across CERT releases.
+
+    Newer mirrors include explicit activity/removable-media columns.  r4.2
+    commonly stores file events without those fields; in that release the file
+    log is already the removable-media/file-copy signal, so we use conservative
+    defaults that keep the event useful for UEBA/DLP features.
+    """
+    df = df.copy()
+    df.columns = [c.strip().lower() for c in df.columns]
+
+    if "filename" not in df.columns:
+        for candidate in ("file", "filepath", "path"):
+            if candidate in df.columns:
+                df = df.rename(columns={candidate: "filename"})
+                break
+
+    if "activity" not in df.columns:
+        df["activity"] = "File Write"
+    if "filename" not in df.columns:
+        df["filename"] = ""
+    if "content" not in df.columns:
+        df["content"] = ""
+    if "to_removable_media" not in df.columns:
+        df["to_removable_media"] = True
+    if "from_removable_media" not in df.columns:
+        df["from_removable_media"] = False
+
+    return df
+
+
+def boolish_to_int(series: pd.Series) -> pd.Series:
+    return (
+        series.map({
+            True: 1, False: 0,
+            "True": 1, "False": 0,
+            "true": 1, "false": 0,
+            "1": 1, "0": 0,
+            1: 1, 0: 0,
+        })
+        .fillna(0)
+        .astype(int)
+    )
+
+
 def iter_csv_chunks(path: Path, *, tolerate_bad_lines: bool = False):
     """Yield CSV chunks with an optional tolerant parser for malformed rows."""
     kwargs = {"chunksize": CHUNK_SIZE}
@@ -164,20 +209,15 @@ def aggregate_file_daily(file_csv: Path) -> pd.DataFrame:
     """Aggregate file access events to per-user-day features (chunked)."""
     chunk_results = []
     for chunk in pd.read_csv(file_csv, chunksize=CHUNK_SIZE):
-        chunk.columns = [c.strip().lower() for c in chunk.columns]
+        chunk = normalize_file_schema(chunk)
         chunk["date"] = pd.to_datetime(chunk["date"], format="%m/%d/%Y %H:%M:%S", errors="coerce")
         chunk = chunk.dropna(subset=["date", "user", "activity"]).copy()
         chunk["user"] = chunk["user"].astype(str).str.strip().str.upper()
         chunk["day"] = chunk["date"].dt.date.astype(str)
         hour = chunk["date"].dt.hour
         chunk["is_after_hours"] = ((hour < 7) | (hour > 20)).astype(int)
-        # to_removable_media and from_removable_media are bool values read as Python bool or string
-        chunk["to_removable_media"] = chunk["to_removable_media"].map(
-            {True: 1, False: 0, "True": 1, "False": 0}
-        ).fillna(0).astype(int)
-        chunk["from_removable_media"] = chunk["from_removable_media"].map(
-            {True: 1, False: 0, "True": 1, "False": 0}
-        ).fillna(0).astype(int)
+        chunk["to_removable_media"] = boolish_to_int(chunk["to_removable_media"])
+        chunk["from_removable_media"] = boolish_to_int(chunk["from_removable_media"])
         chunk["is_write"] = (chunk["activity"] == "File Write").astype(int)
         grouped = chunk.groupby(["user", "day"]).agg(
             file_total=("id", "count"),
@@ -250,8 +290,7 @@ def clean_device_chunk(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def clean_file_chunk(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df.columns = [c.strip().lower() for c in df.columns]
+    df = normalize_file_schema(df)
     df["date"] = pd.to_datetime(df["date"], format="%m/%d/%Y %H:%M:%S", errors="coerce")
     df = df.dropna(subset=["date", "id", "user", "pc", "activity", "filename"]).copy()
     df = df.drop_duplicates(subset=["id"]).reset_index(drop=True)
@@ -259,12 +298,8 @@ def clean_file_chunk(df: pd.DataFrame) -> pd.DataFrame:
     df["pc"] = df["pc"].astype(str).str.strip().str.upper()
     df["activity"] = df["activity"].astype(str).str.strip()
     df["filename"] = df["filename"].astype(str).str.strip()
-    df["to_removable_media"] = df["to_removable_media"].map(
-        {True: 1, False: 0, "True": 1, "False": 0}
-    ).fillna(0).astype(int)
-    df["from_removable_media"] = df["from_removable_media"].map(
-        {True: 1, False: 0, "True": 1, "False": 0}
-    ).fillna(0).astype(int)
+    df["to_removable_media"] = boolish_to_int(df["to_removable_media"])
+    df["from_removable_media"] = boolish_to_int(df["from_removable_media"])
     df["day"] = df["date"].dt.date.astype(str)
     df["hour"] = df["date"].dt.hour
     df["is_after_hours"] = ((df["hour"] < 7) | (df["hour"] > 20)).astype(int)
