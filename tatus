@@ -1,5 +1,0 @@
-[33md6201f7[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m feat: full interactive monitoring dashboard with 6 tabs
-[33m5562480[m refactor: replace per-user LSTM with single global model, batch_size=256, full GPU
-[33m96e642d[m fix: remove stale TRAIN_FRACTION reference
-[33m1bf559c[m fix: parse attachments as file paths not numeric count
-[33m77d7a3b[m fix: apply train/val/test split in cleaning and training scripts

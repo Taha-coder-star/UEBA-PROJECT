@@ -188,11 +188,11 @@ def print_outputs() -> None:
         ("Cleaned data", DATA_ROOT / "cleaned"),
         ("Models", DATA_ROOT / "models"),
         ("Plots", DATA_ROOT / "plots"),
-        ("Dashboard", REPO_DIR / "app" / "ueba_dashboard.py"),
+        ("Dashboard", REPO_DIR / "app" / "ueba_dashboard_tabs.py"),
     ]:
         print(f"{label:14}: {path}")
     print("\nLaunch later with:")
-    print(f"  DLP_ROOT={DATA_ROOT} DLP_REPO={REPO_DIR} streamlit run {REPO_DIR / 'app' / 'ueba_dashboard.py'}")
+    print(f"  DLP_ROOT={DATA_ROOT} DLP_REPO={REPO_DIR} streamlit run {REPO_DIR / 'app' / 'ueba_dashboard_tabs.py'}")
 
 
 def launch_dashboard() -> None:
@@ -212,7 +212,7 @@ def launch_dashboard() -> None:
             [
                 "streamlit",
                 "run",
-                str(REPO_DIR / "app" / "ueba_dashboard.py"),
+                str(REPO_DIR / "app" / "ueba_dashboard_tabs.py"),
                 "--server.port",
                 "8501",
                 "--server.headless",

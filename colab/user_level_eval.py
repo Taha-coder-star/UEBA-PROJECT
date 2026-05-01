@@ -1,16 +1,16 @@
 """User-level anomaly detection evaluation -- fixed pipeline.
 
-Previous scripts applied percentile thresholds to row-level daily scores and
-used only max aggregation.  Both choices were wrong:
+Earlier experiments applied percentile thresholds to row-level daily scores and
+used only max aggregation. Both choices were wrong:
 
-  Bug 1 (threshold_analysis, filter_topk_analysis):
+  Bug 1:
     np.percentile(train_rows, 95) operates on ~100k daily rows.
     That cutoff is then compared against one-score-per-user values that live
     on a completely different scale -- the LSTM filter passed all 1000 users.
     Fix: aggregate rows to one score per user first, compute percentiles of
          the resulting 1000-value user distribution.
 
-  Bug 2 (all three scripts):
+  Bug 2:
     Only max aggregation was tried.  For LSTM, every user's max daily score
     rounds to 1.0, so max is useless.  mean and p95 (95th percentile of a
     user's daily scores) carry actual signal.

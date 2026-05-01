@@ -1,14 +1,12 @@
 """Genetic Algorithm optimizer for risk-score weights and flag thresholds.
 
-Optimizes the 6 weights in risk_scorer.WEIGHTS and the 6 flag thresholds
-in risk_scorer._FLAG_RULES to maximise insider-detection quality using
-existing scored CSVs -- no model retraining required.
+Optimizes risk_scorer.WEIGHTS and risk_scorer._FLAG_RULES to maximise
+insider-detection quality using existing scored CSVs -- no model retraining
+required.
 
-Chromosome layout (12 genes):
-  genes[0:6]   raw weights for [lstm_p95, after_hours, bcc_usage,
-                                 file_exfil, usb_activity, multi_pc]
-               normalised to sum=1 during fitness evaluation
-  genes[6:12]  flag thresholds (one per signal, clipped to [0.10, 0.95])
+Chromosome layout (2 * N genes):
+  genes[0:N]   raw signal weights, normalised to sum=1 during evaluation
+  genes[N:2N]  flag thresholds per signal, clipped to [0.10, 0.95]
 
 Fitness = 0.8 * F1@50 + 0.2 * flag_coverage@50
   - F1@50          : standard F1 for top-50 risk-ranked users vs ground truth
@@ -46,6 +44,7 @@ from ground_truth import GroundTruthSelection, describe_selection, select_ground
 
 LSTM_CSV     = CLEANED_DIR / "email_user_daily_lstm_scored.csv"
 IFOREST_CSV  = CLEANED_DIR / "email_user_daily_scored.csv"
+SENSITIVITY_CSV = CLEANED_DIR / "content_sensitivity_daily.csv"
 
 GA_CONFIG_PATH = MODELS_DIR / "ga_optimized_config.json"
 GA_REPORT_PATH = MODELS_DIR / "ga_optimization_report.json"
@@ -60,6 +59,7 @@ SIGNAL_NAMES = [
     "file_exfil",
     "usb_activity",
     "multi_pc",
+    "content_sensitivity",
 ]
 SIGNAL_NORM_COLS = [
     "lstm_p95_norm",
@@ -68,11 +68,13 @@ SIGNAL_NORM_COLS = [
     "file_exfil_norm",
     "usb_activity_norm",
     "multi_pc_norm",
+    "content_sensitivity_norm",
 ]
 FLAG_SIGNAL_COLS = SIGNAL_NORM_COLS  # thresholds apply in the same order
 
-BASELINE_WEIGHTS = [0.50, 0.15, 0.10, 0.10, 0.10, 0.05]
-BASELINE_THRESHOLDS = [0.70, 0.50, 0.50, 0.50, 0.50, 0.50]
+BASELINE_WEIGHTS = [0.45, 0.13, 0.09, 0.09, 0.09, 0.05, 0.10]
+BASELINE_THRESHOLDS = [0.70, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50]
+N_SIGNALS = len(SIGNAL_NAMES)
 
 # GA hyper-parameters
 POP_SIZE        = 60
@@ -107,7 +109,7 @@ def _minmax(series: pd.Series) -> pd.Series:
 def load_data() -> tuple[np.ndarray, np.ndarray, set[str], GroundTruthSelection]:
     """Return (norm_signals_matrix, user_ids, insider_users, gt_selection).
 
-    norm_signals_matrix: shape (n_users, 6) — each column is one normalised
+    norm_signals_matrix: shape (n_users, N_SIGNALS) -- each column is one normalised
                          signal, ready for dot-product with the weight vector.
     user_ids            : numpy array of user strings (same order as rows).
     insider_users       : ground-truth set from insiders.csv.
@@ -160,6 +162,18 @@ def load_data() -> tuple[np.ndarray, np.ndarray, set[str], GroundTruthSelection]
     # Merge LSTM scores + behavioural signals
     df = lstm_user.merge(beh, on="user", how="left").fillna(0)
 
+    if SENSITIVITY_CSV.exists():
+        sensitivity = pd.read_csv(SENSITIVITY_CSV, usecols=["user", "max_sensitivity_score"])
+        sensitivity_user = (
+            sensitivity.groupby("user", as_index=False)
+            .agg(content_sensitivity=("max_sensitivity_score", "mean"))
+        )
+        df = df.merge(sensitivity_user, on="user", how="left")
+    else:
+        print(f"  [WARN] {SENSITIVITY_CSV} not found; GA content_sensitivity signal is zero.")
+        df["content_sensitivity"] = 0.0
+    df["content_sensitivity"] = df["content_sensitivity"].fillna(0)
+
     # Normalise each signal independently across all users
     df["lstm_p95_norm"]     = _minmax(df["score_p95"])
     df["after_hours_norm"]  = _minmax(df["after_hours_rate"])
@@ -167,6 +181,7 @@ def load_data() -> tuple[np.ndarray, np.ndarray, set[str], GroundTruthSelection]
     df["file_exfil_norm"]   = _minmax(df["file_exfil_rate"])
     df["usb_activity_norm"] = _minmax(df["total_usb"])
     df["multi_pc_norm"]     = _minmax(df["max_unique_pcs"])
+    df["content_sensitivity_norm"] = _minmax(df["content_sensitivity"])
 
     norm_matrix = df[SIGNAL_NORM_COLS].values.astype(np.float32)
     user_ids    = df["user"].values
@@ -200,11 +215,11 @@ def evaluate_chromosome(
 ) -> float:
     """Compute fitness for a single chromosome.
 
-    chrom[0:6]  raw weights (will be normalised)
-    chrom[6:12] flag thresholds
+    chrom[0:N]  raw weights (will be normalised)
+    chrom[N:2N] flag thresholds
     """
     # Normalise weights to sum = 1
-    raw_w = np.clip(chrom[:6], W_LOW, W_HIGH)
+    raw_w = np.clip(chrom[:N_SIGNALS], W_LOW, W_HIGH)
     w = raw_w / raw_w.sum()
 
     # Risk score = weighted sum of normalised signals
@@ -218,8 +233,8 @@ def evaluate_chromosome(
     f1 = _f1_at_k(ranked, insider_set, k)
 
     # Secondary: flag coverage (fraction of top-K with >= 1 flag triggered)
-    thresholds = np.clip(chrom[6:12], T_LOW, T_HIGH)
-    top_k_signals = norm_matrix[order[:k]]          # (k, 6)
+    thresholds = np.clip(chrom[N_SIGNALS:], T_LOW, T_HIGH)
+    top_k_signals = norm_matrix[order[:k]]
     flags_triggered = (top_k_signals >= thresholds).any(axis=1)
     coverage = flags_triggered.mean()
 
@@ -245,8 +260,8 @@ def evaluate_population(
 # ===========================================================================
 
 def _random_chromosome(rng: np.random.Generator) -> np.ndarray:
-    weights    = rng.uniform(W_LOW, W_HIGH, 6)
-    thresholds = rng.uniform(T_LOW, T_HIGH, 6)
+    weights    = rng.uniform(W_LOW, W_HIGH, N_SIGNALS)
+    thresholds = rng.uniform(T_LOW, T_HIGH, N_SIGNALS)
     return np.concatenate([weights, thresholds])
 
 
@@ -273,8 +288,8 @@ def _mutate(chrom: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     mask = rng.random(len(out)) < MUTATION_RATE
     out[mask] += rng.normal(0, MUTATION_SIGMA, mask.sum())
     # Clip back to bounds
-    out[:6]  = np.clip(out[:6],  W_LOW, W_HIGH)
-    out[6:]  = np.clip(out[6:],  T_LOW, T_HIGH)
+    out[:N_SIGNALS]  = np.clip(out[:N_SIGNALS],  W_LOW, W_HIGH)
+    out[N_SIGNALS:]  = np.clip(out[N_SIGNALS:],  T_LOW, T_HIGH)
     return out
 
 
@@ -383,9 +398,9 @@ def build_results(
     k: int = TOP_K,
 ) -> dict:
     """Compute per-signal breakdown and F1 metrics for the best chromosome."""
-    raw_w = np.clip(best_chrom[:6], W_LOW, W_HIGH)
+    raw_w = np.clip(best_chrom[:N_SIGNALS], W_LOW, W_HIGH)
     w     = raw_w / raw_w.sum()
-    thresholds = np.clip(best_chrom[6:12], T_LOW, T_HIGH)
+    thresholds = np.clip(best_chrom[N_SIGNALS:], T_LOW, T_HIGH)
 
     risk_scores = norm_matrix @ w
     order       = np.argsort(-risk_scores)
@@ -451,9 +466,9 @@ def save_outputs(
 ) -> None:
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-    raw_w = np.clip(best_chrom[:6], W_LOW, W_HIGH)
+    raw_w = np.clip(best_chrom[:N_SIGNALS], W_LOW, W_HIGH)
     w     = raw_w / raw_w.sum()
-    thresholds = np.clip(best_chrom[6:12], T_LOW, T_HIGH)
+    thresholds = np.clip(best_chrom[N_SIGNALS:], T_LOW, T_HIGH)
 
     config = {
         "_description": (
